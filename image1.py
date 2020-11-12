@@ -27,6 +27,32 @@ class image_converter:
     self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size = 10)
     self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=10)
     self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=10)
+    self.prev_yellow = np.array([0,0])
+    self.prev_blue = np.array([0,0])
+    self.prev_green = np.array([0,0])
+    self.prev_red = np.array([0,0])
+
+  def detect_colour(self, image, low, high):
+    kernel = np.ones((5,5), np.uint8)
+    mask = cv2.dilate(cv2.inRange(image, low, high), kernel, iterations=3)
+    moments = cv2.moments(mask)
+    if(moments['m00'] != 0):
+      centreY = int(moments['m10'] / moments['m00'])
+      centreZ = int(moments['m01'] / moments['m00'])
+    else:
+      if(low == (0,100,100)):
+        centreY = self.prev_yellow[0]
+        centreZ = self.prev_yellow[1]
+      elif(low == (100, 0, 0)):
+        centreY = self.prev_blue[0]
+        centreZ = self.prev_blue[1]
+      elif(low == (0, 100, 0)):
+        centreY = self.prev_green[0]
+        centreZ = self.prev_green[1]
+      else:
+        centreY = self.prev_red[0]
+        centreZ = self.prev_red[1]
+    return np.array([centreY, centreZ])
 
   # Recieve data from camera 1, process it, and publish
   def callback1(self,data):
@@ -39,13 +65,24 @@ class image_converter:
     # Uncomment if you want to save the image
     #cv2.imwrite('image_copy.png', cv_image)
 
-    # im1=cv2.imshow('window1', self.cv_image1)
-    # cv2.waitKey(1)
+    im1=cv2.imshow('window1', self.cv_image1)
+    cv2.waitKey(1)
 
+    # Move the joints
     time = rospy.get_time() - self.start_time
     joint2Move = (np.pi/2) * np.sin((np.pi/15) * time)
     joint3Move = (np.pi / 2) * np.sin((np.pi / 18) * time)
     joint4Move = (np.pi / 2) * np.sin((np.pi / 20) * time)
+
+    yellow = self.detect_colour(self.cv_image1, (0,100,100), (0,255,255))
+    blue = self.detect_colour(self.cv_image1, (100, 0, 0), (255, 0, 0))
+    green = self.detect_colour(self.cv_image1, (0, 100, 0), (0, 255, 0))
+    red = self.detect_colour(self.cv_image1, (0, 0, 100), (0, 0, 255))
+    self.prev_yellow = yellow
+    self.prev_blue = blue
+    self.prev_green = green
+    self.prev_red = red
+    print(yellow, blue, green, red)
 
     # Publish the results
     try: 
@@ -55,7 +92,6 @@ class image_converter:
       self.robot_joint4_pub.publish(joint4Move)
     except CvBridgeError as e:
       print(e)
-
 
 # call the class
 def main(args):
