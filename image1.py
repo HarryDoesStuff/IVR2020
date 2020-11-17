@@ -31,6 +31,10 @@ class image_converter:
     self.prev_blue = np.array([0,0])
     self.prev_green = np.array([0,0])
     self.prev_red = np.array([0,0])
+    self.prev_joint2_estimate = 0
+    self.prev_joint4_estimate = 0
+    self.joint2_estimate_pub = rospy.Publisher("/robot/joint2_position_estimate", Float64, queue_size=10)
+    self.joint4_estimate_pub = rospy.Publisher("/robot/joint4_position_estimate", Float64, queue_size=10)
 
   def detect_colour(self, image, low, high):
     kernel = np.ones((5,5), np.uint8)
@@ -54,11 +58,37 @@ class image_converter:
         centreZ = self.prev_red[1]
     return np.array([centreY, centreZ])
 
+  def getJointAngles(self, blue, green, red):
+    joint2Angle = np.arctan2(blue[0] - green[0], blue[1] - green[1])
+    joint4Angle = np.arctan2(green[0] - red[0], green[1] - red[1]) - joint2Angle
+    if joint2Angle > np.pi/2:
+      joint2Angle = np.pi/2
+    elif joint2Angle < -np.pi/2:
+      joint2Angle = -np.pi/2
+
+    if joint4Angle > np.pi/2:
+      joint4Angle = np.pi/2
+    elif joint4Angle < -np.pi/2:
+      joint4Angle = -np.pi/2
+
+    if(np.abs(joint2Angle - self.prev_joint2_estimate) > 0.5):
+      if(joint2Angle > self.prev_joint2_estimate):
+        joint2Angle = self.prev_joint2_estimate + 0.05
+      else:
+        joint2Angle = self.prev_joint2_estimate - 0.05
+    if(np.abs(joint4Angle - self.prev_joint4_estimate) > 0.5):
+      if (joint4Angle > self.prev_joint4_estimate):
+        joint4Angle = self.prev_joint4_estimate + 0.05
+      else:
+        joint4Angle = self.prev_joint4_estimate - 0.05
+
+    return joint2Angle, joint4Angle
   # Recieve data from camera 1, process it, and publish
   def callback1(self,data):
     # Recieve the image
     try:
       self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8")
+      # joint3Estimate = data[1]
     except CvBridgeError as e:
       print(e)
     
@@ -78,11 +108,26 @@ class image_converter:
     blue = self.detect_colour(self.cv_image1, (100, 0, 0), (255, 0, 0))
     green = self.detect_colour(self.cv_image1, (0, 100, 0), (0, 255, 0))
     red = self.detect_colour(self.cv_image1, (0, 0, 100), (0, 0, 255))
+
+    if(blue[1] < green[1]):
+      green[1] = blue[1]
+
     self.prev_yellow = yellow
     self.prev_blue = blue
     self.prev_green = green
     self.prev_red = red
-    print(yellow, blue, green, red)
+    # print(yellow, blue, green, red)
+
+    # if joint3Estimate > np.pi/4:
+    #   joint3Angle = self.getJointAngles(blue, green, red, 'y')
+    #   self.joint3_estimate_pub.publish(joint3Angle)
+    # else:
+    joint2Angle, joint4Angle = self.getJointAngles(blue, green, red)
+    self.prev_joint2_estimate = joint2Angle
+    self.prev_joint4_estimate = joint4Angle
+
+
+    # print(joint2Angle, joint4Angle)
 
     # Publish the results
     try: 
@@ -90,6 +135,8 @@ class image_converter:
       self.robot_joint2_pub.publish(joint2Move)
       self.robot_joint3_pub.publish(joint3Move)
       self.robot_joint4_pub.publish(joint4Move)
+      self.joint2_estimate_pub.publish(joint2Angle)
+      self.joint4_estimate_pub.publish(joint4Angle)
     except CvBridgeError as e:
       print(e)
 

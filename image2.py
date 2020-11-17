@@ -23,7 +23,50 @@ class image_converter:
     self.image_sub2 = rospy.Subscriber("/camera2/robot/image_raw",Image,self.callback2)
     # initialize the bridge between openCV and ROS
     self.bridge = CvBridge()
+    self.prev_yellow = np.array([0,0])
+    self.prev_blue = np.array([0,0])
+    self.prev_green = np.array([0,0])
+    self.prev_red = np.array([0,0])
+    self.prev_joint3_estimate = 0
+    self.joint3_estimate_pub = rospy.Publisher("/robot/joint3_position_estimate", Float64, queue_size=10)
 
+  def detect_colour(self, image, low, high):
+    kernel = np.ones((5,5), np.uint8)
+    mask = cv2.dilate(cv2.inRange(image, low, high), kernel, iterations=3)
+    moments = cv2.moments(mask)
+    if(moments['m00'] != 0):
+      centreX = int(moments['m10'] / moments['m00'])
+      centreZ = int(moments['m01'] / moments['m00'])
+    else:
+      if(low == (0,100,100)):
+        centreX = self.prev_yellow[0]
+        centreZ = self.prev_yellow[1]
+      elif(low == (100, 0, 0)):
+        centreX = self.prev_blue[0]
+        centreZ = self.prev_blue[1]
+      elif(low == (0, 100, 0)):
+        centreX = self.prev_green[0]
+        centreZ = self.prev_green[1]
+      else:
+        centreX = self.prev_red[0]
+        centreZ = self.prev_red[1]
+    return np.array([centreX, centreZ])
+
+
+  def getJointAngles(self, blue, green):
+    joint3Angle = -np.arctan2(blue[0] - green[0], blue[1] - green[1])
+    if joint3Angle > np.pi/2:
+      joint3Angle = np.pi/2
+    elif joint3Angle < -np.pi/2:
+      joint3Angle = -np.pi/2
+
+    if (np.abs(joint3Angle - self.prev_joint3_estimate) > 0.5):
+      if (joint3Angle > self.prev_joint3_estimate):
+        joint3Angle = self.prev_joint3_estimate + 0.05
+      else:
+        joint3Angle = self.prev_joint3_estimate - 0.05
+
+    return joint3Angle
 
   # Recieve data, process it, and publish
   def callback2(self,data):
@@ -37,9 +80,27 @@ class image_converter:
     im2=cv2.imshow('window2', self.cv_image2)
     cv2.waitKey(1)
 
+    yellow = self.detect_colour(self.cv_image2, (0,100,100), (0,255,255))
+    blue = self.detect_colour(self.cv_image2, (100, 0, 0), (255, 0, 0))
+    green = self.detect_colour(self.cv_image2, (0, 100, 0), (0, 255, 0))
+    red = self.detect_colour(self.cv_image2, (0, 0, 100), (0, 0, 255))
+
+    if(blue[1] < green[1]):
+      green[1] = blue[1]
+
+    self.prev_yellow = yellow
+    self.prev_blue = blue
+    self.prev_green = green
+    self.prev_red = red
+    # print(yellow, blue, green, red)
+
+    joint3Angle = self.getJointAngles(blue, green)
+    self.prev_joint3_estimate = joint3Angle
+
     # Publish the results
     try: 
       self.image_pub2.publish(self.bridge.cv2_to_imgmsg(self.cv_image2, "bgr8"))
+      self.joint3_estimate_pub.publish(joint3Angle)
     except CvBridgeError as e:
       print(e)
 
