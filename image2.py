@@ -28,7 +28,12 @@ class image_converter:
     self.prev_green = np.array([0,0])
     self.prev_red = np.array([0,0])
     self.prev_joint3_estimate = 0
+    self.prev_target_x_estimate = [0,0]
+    self.prev_target_z_estimate = 0
+    self.circle_chamfer = cv2.imread("chamfer_template.png", 0)
     self.joint3_estimate_pub = rospy.Publisher("/robot/joint3_position_estimate", Float64, queue_size=10)
+    self.target_prediction_x_pub = rospy.Publisher("/target/x_position_estimate", Float64, queue_size=10)
+    self.target_prediction_z_pub = rospy.Publisher("/target/z_position_estimate2", Float64, queue_size=10)
 
   def detect_colour(self, image, low, high):
     kernel = np.ones((5,5), np.uint8)
@@ -60,13 +65,37 @@ class image_converter:
     elif joint3Angle < -np.pi/2:
       joint3Angle = -np.pi/2
 
-    if (np.abs(joint3Angle - self.prev_joint3_estimate) > 0.5):
+    if (np.abs(joint3Angle - self.prev_joint3_estimate) > 1):
       if (joint3Angle > self.prev_joint3_estimate):
-        joint3Angle = self.prev_joint3_estimate + 0.05
+        joint3Angle = self.prev_joint3_estimate + 0.08
       else:
-        joint3Angle = self.prev_joint3_estimate - 0.05
+        joint3Angle = self.prev_joint3_estimate - 0.08
 
     return joint3Angle
+
+  def pix2Metres(self, yellow, blue):
+    return 2.5/np.linalg.norm(yellow-blue)
+
+  def getSpherePos(self, image, yellow, blue):
+    kernel = np.ones((5,5), np.uint8)
+    mask = cv2.dilate(cv2.inRange(image, (5, 50, 50), (15, 255, 255)), kernel, iterations=3)
+    result = cv2.matchTemplate(mask, self.circle_chamfer, cv2.TM_CCOEFF_NORMED)
+    valMin, valMax, posMin, posMax = cv2.minMaxLoc(result)
+    if(valMax > 0.78):
+      width, height = self.circle_chamfer.shape[::-1]
+      (x,z) = (posMax[0] + int(width/2), posMax[1] + int(height/2))
+      x = (x - yellow[0]) * self.pix2Metres(yellow, blue)
+      z = (yellow[1] - z) * self.pix2Metres(yellow, blue)
+    else:
+      x = self.prev_target_x_estimate[0] + (self.prev_target_x_estimate[0] - self.prev_target_x_estimate[1])
+      z = self.prev_target_z_estimate
+
+    if(x < -2):
+      x = -2
+    elif(x > 3):
+      x = 3
+
+    return (x,z)
 
   # Recieve data, process it, and publish
   def callback2(self,data):
@@ -97,10 +126,17 @@ class image_converter:
     joint3Angle = self.getJointAngles(blue, green)
     self.prev_joint3_estimate = joint3Angle
 
+    (x,z) = self.getSpherePos(self.cv_image2, yellow, blue)
+    self.prev_target_x_estimate[1] = self.prev_target_x_estimate[0]
+    self.prev_target_x_estimate[0] = x
+    self.prev_target_z_estimate = z
+
     # Publish the results
     try: 
       self.image_pub2.publish(self.bridge.cv2_to_imgmsg(self.cv_image2, "bgr8"))
       self.joint3_estimate_pub.publish(joint3Angle)
+      self.target_prediction_x_pub.publish(x)
+      self.target_prediction_z_pub.publish(z)
     except CvBridgeError as e:
       print(e)
 

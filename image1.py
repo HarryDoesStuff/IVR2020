@@ -27,14 +27,22 @@ class image_converter:
     self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size = 10)
     self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=10)
     self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=10)
+    self.metre_ratio = 0
     self.prev_yellow = np.array([0,0])
     self.prev_blue = np.array([0,0])
     self.prev_green = np.array([0,0])
     self.prev_red = np.array([0,0])
     self.prev_joint2_estimate = 0
     self.prev_joint4_estimate = 0
+    self.prev_target_y_estimate = [0,0]
+    self.prev_target_z_estimate = 0
     self.joint2_estimate_pub = rospy.Publisher("/robot/joint2_position_estimate", Float64, queue_size=10)
     self.joint4_estimate_pub = rospy.Publisher("/robot/joint4_position_estimate", Float64, queue_size=10)
+    self.circle_chamfer = cv2.imread("chamfer_template.png", 0)
+    self.target_prediction_y_pub = rospy.Publisher("/target/y_position_estimate", Float64, queue_size=10)
+    self.target_prediction_z_pub = rospy.Publisher("/target/z_position_estimate", Float64, queue_size=10)
+    self.target_prediction_z_sub = rospy.Subscriber("/target/z_position_estimate2", Float64, self.callbackZPos)
+    self.camera2_z_estimate = 0
 
   def detect_colour(self, image, low, high):
     kernel = np.ones((5,5), np.uint8)
@@ -71,18 +79,54 @@ class image_converter:
     elif joint4Angle < -np.pi/2:
       joint4Angle = -np.pi/2
 
-    if(np.abs(joint2Angle - self.prev_joint2_estimate) > 0.5):
+    if(np.abs(joint2Angle - self.prev_joint2_estimate) > 1):
       if(joint2Angle > self.prev_joint2_estimate):
-        joint2Angle = self.prev_joint2_estimate + 0.05
+        joint2Angle = self.prev_joint2_estimate + 0.08
       else:
-        joint2Angle = self.prev_joint2_estimate - 0.05
+        joint2Angle = self.prev_joint2_estimate - 0.08
     if(np.abs(joint4Angle - self.prev_joint4_estimate) > 0.5):
       if (joint4Angle > self.prev_joint4_estimate):
-        joint4Angle = self.prev_joint4_estimate + 0.05
+        joint4Angle = self.prev_joint4_estimate + 0.08
       else:
-        joint4Angle = self.prev_joint4_estimate - 0.05
+        joint4Angle = self.prev_joint4_estimate - 0.08
 
     return joint2Angle, joint4Angle
+
+  def pix2Metres(self, yellow, blue):
+    return 2.5/np.linalg.norm(yellow-blue)
+
+  def getSpherePos(self, image, yellow, blue):
+    kernel = np.ones((5,5), np.uint8)
+    mask = cv2.dilate(cv2.inRange(image, (5, 50, 50), (15, 255, 255)), kernel, iterations=3)
+    result = cv2.matchTemplate(mask, self.circle_chamfer, cv2.TM_CCOEFF_NORMED)
+    valMin, valMax, posMin, posMax = cv2.minMaxLoc(result)
+    if(valMax > 0.8):
+      width, height = self.circle_chamfer.shape[::-1]
+      (y,z) = (posMax[0] + int(width/2), posMax[1] + int(height/2))
+      y = (y - yellow[0]) * self.pix2Metres(yellow, blue)
+      z = (yellow[1] - z) * self.pix2Metres(yellow, blue)
+    else:
+      y = self.prev_target_y_estimate[0] + (self.prev_target_y_estimate[0] - self.prev_target_y_estimate[1])
+      z = self.prev_target_z_estimate
+
+    if(self.camera2_z_estimate == 0):
+      self.camera2_z_estimate = z
+
+    z = ((z + self.camera2_z_estimate)/2) - 0.25
+
+    if(y < -2.5):
+      y = -2.5
+    elif(y > 2.5):
+      y = 2.5
+    if(z < 6):
+      z = 6
+    elif(z > 8):
+      z = 8
+    return (y,z)
+
+  def callbackZPos(self, data):
+    self.camera2_z_estimate = data.data
+
   # Recieve data from camera 1, process it, and publish
   def callback1(self,data):
     # Recieve the image
@@ -123,8 +167,13 @@ class image_converter:
     #   self.joint3_estimate_pub.publish(joint3Angle)
     # else:
     joint2Angle, joint4Angle = self.getJointAngles(blue, green, red)
+    (y,z) = self.getSpherePos(self.cv_image1, yellow, blue)
     self.prev_joint2_estimate = joint2Angle
     self.prev_joint4_estimate = joint4Angle
+    self.prev_target_y_estimate[1] = self.prev_target_y_estimate[0]
+    self.prev_target_y_estimate[0] = y
+    self.prev_target_z_estimate = z
+
 
 
     # print(joint2Angle, joint4Angle)
@@ -137,6 +186,8 @@ class image_converter:
       self.robot_joint4_pub.publish(joint4Move)
       self.joint2_estimate_pub.publish(joint2Angle)
       self.joint4_estimate_pub.publish(joint4Angle)
+      self.target_prediction_y_pub.publish(y)
+      self.target_prediction_z_pub.publish(z)
     except CvBridgeError as e:
       print(e)
 
