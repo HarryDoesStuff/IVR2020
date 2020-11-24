@@ -106,7 +106,7 @@ class image_converter:
       y = (y - yellow[0]) * self.pix2Metres(yellow, blue)
       z = (yellow[1] - z) * self.pix2Metres(yellow, blue)
     else:
-      y = self.prev_target_y_estimate[0] + (self.prev_target_y_estimate[0] - self.prev_target_y_estimate[1])
+      y = self.prev_target_y_estimate
       z = self.prev_target_z_estimate
 
     if(self.camera2_z_estimate == 0):
@@ -162,16 +162,12 @@ class image_converter:
     self.prev_red = red
     # print(yellow, blue, green, red)
 
-    # if joint3Estimate > np.pi/4:
-    #   joint3Angle = self.getJointAngles(blue, green, red, 'y')
-    #   self.joint3_estimate_pub.publish(joint3Angle)
-    # else:
     joint2Angle, joint4Angle = self.getJointAngles(blue, green, red)
     (y,z) = self.getSpherePos(self.cv_image1, yellow, blue)
     self.prev_joint2_estimate = joint2Angle
-    self.prev_joint4_estimate = joint4Angle
-    self.prev_target_y_estimate[1] = self.prev_target_y_estimate[0]
-    self.prev_target_y_estimate[0] = y
+    self.prev_joint4_estimate = joint4Angle_orig
+
+    self.prev_target_y_estimate = y
     self.prev_target_z_estimate = z
 
 

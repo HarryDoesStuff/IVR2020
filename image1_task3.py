@@ -27,11 +27,6 @@ class image_converter:
     self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size = 10)
     self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=10)
     self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=10)
-    self.metre_ratio = 0
-    self.prev_yellow = np.array([0,0])
-    self.prev_blue = np.array([0,0])
-    self.prev_green = np.array([0,0])
-    self.prev_red = np.array([0,0])
     self.prev_joint2_estimate = 0
     self.prev_joint4_estimate = 0
     self.prev_target_y_estimate = [0,0]
@@ -73,8 +68,6 @@ class image_converter:
     if((z > self.prev_joint_zs[jointNo] + 40 or z < self.prev_joint_zs[jointNo] - 40) & (self.prev_joint_zs[jointNo] != 0)):
       z = self.prev_joint_zs[jointNo]
 
-    cv2.circle(mask, (y,z), 15, (255,0,0),2)
-    cv2.imshow('windowtest', mask)
     return (y,z)
 
   def getJointAngles(self):

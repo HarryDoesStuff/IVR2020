@@ -23,10 +23,6 @@ class image_converter:
     self.image_sub2 = rospy.Subscriber("/camera2/robot/image_raw",Image,self.callback2)
     # initialize the bridge between openCV and ROS
     self.bridge = CvBridge()
-    self.prev_yellow = np.array([0,0])
-    self.prev_blue = np.array([0,0])
-    self.prev_green = np.array([0,0])
-    self.prev_red = np.array([0,0])
     self.prev_joint3_estimate = 0
     self.prev_target_x_estimate = [0,0]
     self.prev_target_z_estimate = 0
@@ -34,32 +30,41 @@ class image_converter:
     self.joint3_estimate_pub = rospy.Publisher("/robot/joint3_position_estimate", Float64, queue_size=10)
     self.target_prediction_x_pub = rospy.Publisher("/target/x_position_estimate", Float64, queue_size=10)
     self.target_prediction_z_pub = rospy.Publisher("/target/z_position_estimate2", Float64, queue_size=10)
+    self.yellow_centre = [0,0]
+    self.blue_centre = [0,0]
+    self.green_centre = [0,0]
+    self.red_centre = [0,0]
+    self.prev_joint_ys = [0,0,0,0]
+    self.prev_joint_zs = [0, 0, 0, 0]
 
-  def detect_colour(self, image, low, high):
-    kernel = np.ones((5,5), np.uint8)
-    mask = cv2.dilate(cv2.inRange(image, low, high), kernel, iterations=3)
-    moments = cv2.moments(mask)
-    if(moments['m00'] != 0):
-      centreX = int(moments['m10'] / moments['m00'])
-      centreZ = int(moments['m01'] / moments['m00'])
-    else:
-      if(low == (0,100,100)):
-        centreX = self.prev_yellow[0]
-        centreZ = self.prev_yellow[1]
-      elif(low == (100, 0, 0)):
-        centreX = self.prev_blue[0]
-        centreZ = self.prev_blue[1]
-      elif(low == (0, 100, 0)):
-        centreX = self.prev_green[0]
-        centreZ = self.prev_green[1]
-      else:
-        centreX = self.prev_red[0]
-        centreZ = self.prev_red[1]
-    return np.array([centreX, centreZ])
+  def detect_joint(self, image, tmp, jointNo):
+    # kernel = np.ones((5,5), np.uint8)
+    mask = cv2.inRange(image, (0, 0, 0), (60, 255, 20))
+    template = cv2.imread(tmp, 0)
+    rows, cols = template.shape
+    maxList = []
+    posList = []
+
+    for angle in range(0, 360, 45):
+      rotMatrix = cv2.getRotationMatrix2D((int(cols/2),int(rows/2)), angle, 1)
+      imgRotated = cv2.warpAffine(template, rotMatrix, (cols, rows))
+      result = cv2.matchTemplate(mask, imgRotated, cv2.TM_CCOEFF_NORMED)
+      valMin, valMax, posMin, posMax = cv2.minMaxLoc(result)
+      maxList.append(valMax)
+      posList.append(posMax)
+    maxIndex = maxList.index(max(maxList))
+    (y,z) = (posList[maxIndex][0] + int(rows/2), posList[maxIndex][1] + int(cols/2))
+
+    if((y > self.prev_joint_ys[jointNo] + 40 or y < self.prev_joint_ys[jointNo] - 40) & (self.prev_joint_ys[jointNo] != 0)):
+      y = self.prev_joint_ys[jointNo]
+    if((z > self.prev_joint_zs[jointNo] + 40 or z < self.prev_joint_zs[jointNo] - 40) & (self.prev_joint_zs[jointNo] != 0)):
+      z = self.prev_joint_zs[jointNo]
+
+    return (y,z)
 
 
-  def getJointAngles(self, blue, green):
-    joint3Angle = -np.arctan2(blue[0] - green[0], blue[1] - green[1])
+  def getJointAngles(self):
+    joint3Angle = -np.arctan2(self.blue_centre[0] - self.green_centre[0], self.blue_centre[1] - self.green_centre[1])
     if joint3Angle > np.pi/2:
       joint3Angle = np.pi/2
     elif joint3Angle < -np.pi/2:
@@ -73,10 +78,10 @@ class image_converter:
 
     return joint3Angle
 
-  def pix2Metres(self, yellow, blue):
-    return 2.5/np.linalg.norm(yellow-blue)
+  def pix2Metres(self):
+    return 2.5/np.sqrt((self.yellow_centre[0] - self.blue_centre[0])**2 + (self.yellow_centre[1] - self.blue_centre[1])**2)
 
-  def getSpherePos(self, image, yellow, blue):
+  def getSpherePos(self, image):
     kernel = np.ones((5,5), np.uint8)
     mask = cv2.dilate(cv2.inRange(image, (5, 50, 50), (15, 255, 255)), kernel, iterations=3)
     result = cv2.matchTemplate(mask, self.circle_chamfer, cv2.TM_CCOEFF_NORMED)
@@ -84,8 +89,8 @@ class image_converter:
     if(valMax > 0.78):
       width, height = self.circle_chamfer.shape[::-1]
       (x,z) = (posMax[0] + int(width/2), posMax[1] + int(height/2))
-      x = (x - yellow[0]) * self.pix2Metres(yellow, blue)
-      z = (yellow[1] - z) * self.pix2Metres(yellow, blue)
+      x = (x - self.yellow_centre[0]) * self.pix2Metres()
+      z = (self.yellow_centre[1] - z) * self.pix2Metres()
     else:
       x = self.prev_target_x_estimate[0] + (self.prev_target_x_estimate[0] - self.prev_target_x_estimate[1])
       z = self.prev_target_z_estimate
@@ -109,24 +114,22 @@ class image_converter:
     im2=cv2.imshow('window2', self.cv_image2)
     cv2.waitKey(1)
 
-    yellow = self.detect_colour(self.cv_image2, (0,100,100), (0,255,255))
-    blue = self.detect_colour(self.cv_image2, (100, 0, 0), (255, 0, 0))
-    green = self.detect_colour(self.cv_image2, (0, 100, 0), (0, 255, 0))
-    red = self.detect_colour(self.cv_image2, (0, 0, 100), (0, 0, 255))
+    if(self.yellow_centre[0] == 0):
+      self.yellow_centre = self.detect_joint(self.cv_image2, "joint1template.png", 0)
 
-    if(blue[1] < green[1]):
-      green[1] = blue[1]
+    if(self.blue_centre[0] == 0):
+      self.blue_centre = self.detect_joint(self.cv_image2, "joint2template.png", 1)
 
-    self.prev_yellow = yellow
-    self.prev_blue = blue
-    self.prev_green = green
-    self.prev_red = red
-    # print(yellow, blue, green, red)
+    self.green_centre = self.detect_joint(self.cv_image2, "joint3template.png", 2)
+    self.red_centre = self.detect_joint(self.cv_image2, "joint4template.png", 3)
 
-    joint3Angle = self.getJointAngles(blue, green)
+    if(self.green_centre[1] > self.blue_centre[1]):
+      self.green_centre = (self.green_centre[0], self.blue_centre[1])
+
+    joint3Angle = self.getJointAngles()
     self.prev_joint3_estimate = joint3Angle
 
-    (x,z) = self.getSpherePos(self.cv_image2, yellow, blue)
+    (x,z) = self.getSpherePos(self.cv_image2)
     self.prev_target_x_estimate[1] = self.prev_target_x_estimate[0]
     self.prev_target_x_estimate[0] = x
     self.prev_target_z_estimate = z
